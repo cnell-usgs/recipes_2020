@@ -246,6 +246,10 @@ quanteda_options("threads" = 10)
 library(tidytext)
 library(spacyr)
 library(tokenizers)
+library(widyr)
+library(ggplot2)
+library(igraph)
+library(ggraph)
 
 recipe_nyt <- readRDS('data/recipe_nyt.rds')
 
@@ -273,19 +277,17 @@ saveRDS(food_data, 'data/recipe_ingredients.rds')
 
 ## most common words across all recipes
 
-length(food_data$ingredients) #234 recipes
+length(unique(food_data$ingredients)) #234 recipes - 218 unique
 length(unique(unlist(food_data$ingredients))) # 2006 ingredients
 
-length(unique(ing_list$ingredients)) # 2006
-saveRDS(ing_list, 'data/ingredient_list_raw.rds')
+big_list <- unlist(food_data$ingredients)
 
-ing_stop <- ing_list %>%
+food_unnest <- food_data %>% unnest(ingredients) %>%
   unnest_tokens(word, ingredients) %>%
-  anti_join(stop_words) 
-saveRDS(ing_stop, 'data/ingredient_list_raw.rds')
+  anti_join(stop_words)
 
 # rank of all words
-ing_stop %>%
+food_unnest %>%
   count(word, sort=TRUE)
 
 list.files('data')
@@ -293,12 +295,67 @@ foods<-read.csv('data/top-1k-ingredients.csv', sep=';', col.names=c('word','code
 str(foods)
 
 str(ing_stop)
-common_ingredients <-ing_stop %>%
-  semi_join(foods)%>%
-  count(word, sort=TRUE)
-str(stop_words)
+common_ingredients <-food_unnest %>%
+  semi_join(foods)
+common_ingredients
+
+food_ct <- food_unnest %>% 
+  count(name, word, sort=TRUE) 
+
+total_words <- food_ct %>% 
+  group_by(name)%>%
+  summarize(total=sum(n))
+
+food_words <- food_ct %>%left_join(total_words)
+freq_by_rank <- food_words %>% group_by(name) %>%
+  mutate(rank = row_number(),
+         freq = n/total)%>%
+  ungroup()
+name_tf_idf <- food_words %>%
+  bind_tf_idf(word, name, n)
+name_tf_idf %>%
+  select(-total) %>%
+  arrange(desc(tf_idf))
+
+## remove non food words
+unique(food_ct$word)
+nums <- as.character(seq(1, 1000, by=1))
+
+nonfood <- c('cup','thinly','sliced','kosher','finely','chopped','freshly','ground','teaspoon','cutter','rolled','stemmed','marbled','single',
+             'pounded','master','cutlets','sprig','liquid','crusty','prebaked','skewers','tough','twelve','seasoned','ten','minutes','stewed',
+             'whisk','loosely','pint','75g','top','50g','5oz','600g','75g','litre','generous','scant','freeze','straiend','shaped','bite','100ml','1lb',
+             'discard','spray','persian','tbsp','divided','tsp','pound','tablespoons','fresh','grams','baking','cups','pounds','sauce','packed',
+             'tablespoon','roughly','temperature','ounces', 'inch','ounce','white','oz','serving','cut','red','black','lb','grated',
+             'extra','unsalted','wraps','x7','york',"you\\'ve", 'yuba','whisked','whisker','virgin','purpose','all','diamond','morton','butter','sugar','flour',
+             'vegetable','piece','leaves','juice','peeled','medium','cloves','toasted','tender','stems','yellow','wedge','thick','bought',
+             'extract','crushed','flakes','zest','torn','powder','light','pan','unsweetened','skin','trimmed','green',
+             'paste','rinsed','dried','dry','store','low','sodium','flaky','teaspoons','boneless','skinless','optional','halved',
+             'thighs','lengthwise','dark','crystal','granulated','heavy','plain','greek','pieces','unseasoned','wedges','removed','shiitake',
+             'sea','fine','snap','sprigs','drizzling','active','mill','mortat','n','pestle','style','mixed','heirloom','stalks','diced','powdered','cooked','bittersweet','sticks','melted',
+             'deveined','concentrated','flat','leaf','head','roasted','sweet','shredded','raw','diagonal','grill','hot','short','pinch','baby','neutral','syrup',
+             'double','cans','bone','smoked','crosswise','quartered','drained','garnish','matchsticks')
+
+food_clean <- food_unnest %>%
+  filter(!(word %in% nums))%>%
+  filter(!(word %in% nonfood)) %>%
+  filter(!(word %in% c('salt','oil','olive','pepper','garlic')))
 
 
-common_ingredients %>%
-  ggplot() +
-  
+# common word pairs
+food_pairs <- food_clean %>%
+  pairwise_count(word, name, sort = TRUE)
+
+
+
+set.seed(1234)
+food_pairs %>%
+  filter(n >= 5) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()
+
+## which ingredients are commonly together?
